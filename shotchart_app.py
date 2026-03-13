@@ -9,6 +9,8 @@ import os
 # Set page config
 st.set_page_config(page_title="CBB Shot Chart Explorer", layout="wide", page_icon="🏀")
 
+DEFAULT_CBB_DATA_URL = "https://github.com/cdague10/cbb-shot-chart/releases/download/cbb-pbp-data/cbb_pbp.csv"
+
 # Custom CSS
 st.markdown("""
     <style>
@@ -115,16 +117,17 @@ def _read_shot_source(source):
 def load_data():
     data_url = os.environ.get('CBB_DATA_URL', '').strip()
     data_file_override = os.environ.get('CBB_DATA_FILE', '').strip()
+    default_data_url = os.environ.get('CBB_DEFAULT_DATA_URL', DEFAULT_CBB_DATA_URL).strip()
 
     source_candidates = []
     if data_url:
         source_candidates.append(('url', data_url))
     if data_file_override:
         source_candidates.append(('file', data_file_override))
-    source_candidates.extend([
-        ('file', 'cbb_pbp.csv'),
-        ('file', 'filtered_shots.csv')
-    ])
+    source_candidates.append(('file', 'cbb_pbp.csv'))
+    if default_data_url and not data_url:
+        source_candidates.append(('url', default_data_url))
+    source_candidates.append(('file', 'filtered_shots.csv'))
 
     df = None
     data_source_used = None
