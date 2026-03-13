@@ -122,11 +122,11 @@ def load_data():
     source_candidates = []
     if data_url:
         source_candidates.append(('url', data_url))
-    if data_file_override:
-        source_candidates.append(('file', data_file_override))
     source_candidates.append(('file', 'cbb_pbp.csv'))
     if default_data_url and not data_url:
         source_candidates.append(('url', default_data_url))
+    if data_file_override:
+        source_candidates.append(('file', data_file_override))
     source_candidates.append(('file', 'filtered_shots.csv'))
 
     df = None
