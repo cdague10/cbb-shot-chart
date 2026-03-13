@@ -1,0 +1,544 @@
+import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.patches import Rectangle, Circle, Arc
+import io
+import os
+
+# Set page config
+st.set_page_config(page_title="CBB Shot Chart Explorer", layout="wide", page_icon="🏀")
+
+# Custom CSS
+st.markdown("""
+    <style>
+    .stApp {
+        background:
+            radial-gradient(circle at 12% 4%, rgba(255, 107, 53, 0.18), transparent 28%),
+            radial-gradient(circle at 88% 92%, rgba(73, 132, 255, 0.16), transparent 30%),
+            linear-gradient(165deg, #070b18 0%, #0c1630 55%, #0a1224 100%);
+    }
+    .main {
+        padding: 0rem 1rem;
+    }
+    .block-container {
+        padding-top: 0.75rem !important;
+        padding-bottom: 0.5rem !important;
+    }
+    section[data-testid="stSidebar"] {
+        min-width: 300px !important;
+        max-width: 300px !important;
+    }
+    section[data-testid="stSidebar"] > div:first-child {
+        min-width: 300px !important;
+        max-width: 300px !important;
+    }
+    section[data-testid="stSidebar"] .stMarkdown,
+    section[data-testid="stSidebar"] label {
+        font-size: 1rem;
+    }
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+        font-size: 1.2rem;
+    }
+    section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+    section[data-testid="stSidebar"] .stRadio label {
+        font-size: 0.95rem;
+    }
+    div[data-testid="metric-container"] {
+        padding: 0.15rem 0.25rem !important;
+        margin-bottom: 0 !important;
+    }
+    div[data-testid="metric-container"] label {
+        font-size: 0.72rem !important;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: 1.05rem !important;
+    }
+    .stats-panel-header {
+        font-size: 1.45rem;
+        font-weight: 800;
+        letter-spacing: 0.01em;
+        color: #f4f8ff;
+        margin: 0.05rem 0 0.35rem 0;
+    }
+    .stats-section-title {
+        font-size: 0.96rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        color: #e8f0ff;
+        margin: 0.3rem 0 0.14rem 0;
+    }
+    .stats-card {
+        border: 1px solid rgba(143, 184, 255, 0.32);
+        border-radius: 10px;
+        padding: 0.3rem 0.55rem;
+        margin-bottom: 0.42rem;
+        background: linear-gradient(180deg, rgba(18, 26, 48, 0.78) 0%, rgba(10, 16, 34, 0.88) 100%);
+        box-shadow: 0 6px 14px rgba(0, 0, 0, 0.22);
+    }
+    .stat-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.55rem;
+        font-size: 0.9rem;
+        line-height: 1.28;
+        color: #f4f7ff;
+        padding: 0.1rem 0;
+    }
+    .stat-row span:last-child {
+        font-weight: 700;
+        color: #ffffff;
+    }
+    h1 {
+        color: #FF8F4A;
+        text-shadow: 0 3px 20px rgba(255, 107, 53, 0.28);
+        margin-top: 0.1rem !important;
+        margin-bottom: 0.35rem !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# Load data with caching
+def _read_shot_source(source):
+    """Read shot data from CSV or Parquet path/URL."""
+    source_lower = str(source).lower()
+    if source_lower.endswith('.parquet'):
+        return pd.read_parquet(source)
+    return pd.read_csv(source, on_bad_lines='skip')
+
+
+@st.cache_data
+def load_data():
+    data_url = os.environ.get('CBB_DATA_URL', '').strip()
+    data_file_override = os.environ.get('CBB_DATA_FILE', '').strip()
+
+    source_candidates = []
+    if data_url:
+        source_candidates.append(('url', data_url))
+    if data_file_override:
+        source_candidates.append(('file', data_file_override))
+    source_candidates.extend([
+        ('file', 'cbb_pbp.csv'),
+        ('file', 'filtered_shots.csv')
+    ])
+
+    df = None
+    data_source_used = None
+    load_errors = []
+
+    for source_type, source in source_candidates:
+        if source_type == 'file' and not os.path.exists(source):
+            continue
+        try:
+            df = _read_shot_source(source)
+            data_source_used = source
+            break
+        except Exception as exc:
+            load_errors.append(f"{source}: {exc}")
+
+    if df is None:
+        error_details = "\n".join(load_errors[:3])
+        raise FileNotFoundError(
+            "No usable data source found. Set CBB_DATA_URL to a hosted CSV/Parquet URL, "
+            "or place cbb_pbp.csv / filtered_shots.csv beside this app."
+            + (f"\n\nRecent load errors:\n{error_details}" if error_details else "")
+        )
+
+    # Filter for shots only
+    shot_types = ['DunkShot', 'JumpShot', 'LayUpShot', 'TipShot']
+    shots = df[df['play_type'].isin(shot_types)].copy()
+    shots = shots[(shots['coord_x'].notna()) & (shots['coord_y'].notna())]
+
+    # Remove duplicate plays
+    shots = shots.drop_duplicates(subset=['text', 'game_id', 'clock'], keep='first')
+
+    shot_text = shots['text'].fillna('').str.lower()
+    score_nonempty = shots['score'].fillna('').astype(str).str.strip().ne('')
+    miss_nonempty  = shots['miss'].fillna('').astype(str).str.strip().ne('')
+    text_says_made   = shot_text.str.contains(r'\bmade\b',   regex=True, na=False)
+    text_says_missed = shot_text.str.contains(r'\bmissed\b', regex=True, na=False)
+    text_says_makes  = shot_text.str.contains(r'\bmakes?\b', regex=True, na=False)
+    text_says_misses = shot_text.str.contains(r'\bmisses?\b', regex=True, na=False)
+
+    # A shot is made if score column is filled, OR text says made/makes with no miss signal
+    shots['is_made'] = (
+        score_nonempty |
+        ((text_says_made | text_says_makes) & ~(miss_nonempty | text_says_missed | text_says_misses))
+    )
+    shots['is_three_point'] = shot_text.str.contains('three point', na=False)
+
+    # Assign points
+    shots['points'] = 0
+    shots.loc[shots['is_made'] & shots['is_three_point'], 'points'] = 3
+    shots.loc[shots['is_made'] & ~shots['is_three_point'], 'points'] = 2
+
+    # Extract player names from score/miss columns
+    shots['player'] = shots['score'].fillna('') + shots['miss'].fillna('')
+    shots['player'] = shots['player'].str.strip()
+
+    # Fallback: extract player directly from text for rows still blank after backfill
+    # Covers verbless ESPN format: "Player Two Point Jump Shot"
+    player_blank = shots['player'].eq('')
+    if player_blank.any():
+        import re
+
+        def _player_from_text(t):
+            t = str(t)
+            m = re.match(r"^(.+?)\s+(?:made?|makes?|missed?|misses?)\b", t, re.IGNORECASE)
+            if m:
+                return m.group(1).strip()
+            m = re.match(
+                r"^(.+?)\s+(?:Two|Three|Free\s+Throw|Jump\s+Shot|Dunk|Lay.?[Uu]p|Tip\s+Shot|Hook\s+Shot)",
+                t, re.IGNORECASE
+            )
+            return m.group(1).strip() if m else ''
+
+        text_players = shots.loc[player_blank, 'text'].apply(_player_from_text)
+        shots.loc[player_blank & text_players.ne(''), 'player'] = text_players[text_players.ne('')]
+
+        # Fix is_made for verbless makes (player found, no miss signal)
+        verbless_no_miss = (
+            player_blank &
+            text_players.ne('') &
+            ~shot_text.str.contains(r'\bmiss', regex=True, na=False)
+        )
+        shots.loc[verbless_no_miss, 'is_made'] = True
+
+    shots.attrs['data_source'] = data_source_used
+    return shots
+
+def draw_court(ax, color='white', overlay_zorder=10):
+    """Draw basketball court."""
+    hoop_x, hoop_y = 25, 0
+    
+    # Hoop
+    hoop = Circle((hoop_x, hoop_y), 1, color=color, fill=False, linewidth=2, zorder=overlay_zorder)
+    backboard = Rectangle((hoop_x - 3, hoop_y - 1.05), 6, 0.15, color=color, zorder=overlay_zorder)
+    ax.add_patch(hoop)
+    ax.add_patch(backboard)
+
+    # Layup guide arc
+    layup_arc = Arc(
+        (hoop_x, hoop_y),
+        10,
+        10,
+        angle=0,
+        theta1=0,
+        theta2=180,
+        linewidth=1.8,
+        edgecolor=color,
+        linestyle='--',
+        zorder=overlay_zorder
+    )
+    ax.add_patch(layup_arc)
+    
+    # Paint
+    paint = Rectangle((19, -4), 12, 19, fill=False, linewidth=2, edgecolor=color, zorder=overlay_zorder)
+    ax.add_patch(paint)
+    
+    # Free throw circle
+    ft_circle = Circle((hoop_x, 15), 6, fill=False, linewidth=2, edgecolor=color, zorder=overlay_zorder)
+    ax.add_patch(ft_circle)
+    
+    # 3PT line
+    three_pt_radius = 22.61
+    y_cutoff = 8.1
+    theta_cutoff = np.degrees(np.arcsin((y_cutoff - hoop_y) / three_pt_radius))
+    three_pt_arc = Arc(
+        (hoop_x, hoop_y),
+        2 * three_pt_radius,
+        2 * three_pt_radius,
+        angle=0,
+        theta1=theta_cutoff,
+        theta2=180 - theta_cutoff,
+        linewidth=2,
+        edgecolor=color,
+        zorder=overlay_zorder
+    )
+    ax.add_patch(three_pt_arc)
+    
+    # Corner 3PT lines
+    ax.plot([3.93, 3.93], [-4, 8.15], color=color, linewidth=2, zorder=overlay_zorder)
+    ax.plot([46.07, 46.07], [-4, 8.15], color=color, linewidth=2, zorder=overlay_zorder)
+
+def create_shot_chart(filtered_shots, title, chart_type='scatter'):
+    """Create shot chart visualization."""
+    if len(filtered_shots) == 0:
+        st.warning("No shots found for the selected filters.")
+        return None
+    
+    if chart_type == 'scatter':
+        # Scatter plot individual shots
+        fig, ax = plt.subplots(figsize=(5.2, 5.8))
+        ax.set_facecolor('#f0f0f0')
+        fig.patch.set_facecolor('white')
+        
+        # Made shots
+        made = filtered_shots[filtered_shots['is_made']]
+        ax.scatter(
+            made['coord_x'],
+            made['coord_y'],
+            c='green',
+            s=100,
+            alpha=0.55,
+            edgecolors='darkgreen',
+            linewidths=1,
+            label=f'Made ({len(made)})',
+            zorder=3
+        )
+        
+        # Missed shots
+        missed = filtered_shots[~filtered_shots['is_made']]
+        ax.scatter(
+            missed['coord_x'],
+            missed['coord_y'],
+            c='red',
+            s=80,
+            marker='x',
+            linewidths=1,
+            alpha=0.55,
+            label=f'Missed ({len(missed)})',
+            zorder=3
+        )
+
+        # Keep court markings visible above shot markers
+        draw_court(ax, color='black', overlay_zorder=10)
+        
+        ax.set_xlim(0, 50)
+        ax.set_ylim(-3, 33)
+        ax.set_aspect('equal')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_title(title, fontsize=18, fontweight='bold', pad=0)
+        ax.legend(fontsize=8, loc='upper left')
+        
+    else:  # heatmap
+        fig, ax = plt.subplots(figsize=(4.4, 5.2))
+        ax.set_facecolor('#1a1a1a')
+        fig.patch.set_facecolor('#1a1a1a')
+        
+        hexbin = ax.hexbin(
+            filtered_shots['coord_x'],
+            filtered_shots['coord_y'],
+            C=filtered_shots['points'],
+            gridsize=25,
+            cmap='turbo',
+            mincnt=3,
+            alpha=0.9,
+            vmin=0,
+            vmax=2.5,
+            edgecolors='none',
+            reduce_C_function=np.mean
+        )
+        
+        draw_court(ax, color='white', overlay_zorder=10)
+        
+        cbar = plt.colorbar(hexbin, ax=ax, orientation='horizontal', pad=0.025)
+        cbar.set_label('Expected Points', rotation=0, labelpad=0, fontsize=14, color='white')
+        cbar.ax.tick_params(colors='white')
+        
+        ax.set_xlim(0, 50)
+        ax.set_ylim(-3, 30)
+        ax.set_aspect('equal')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_title(title, fontsize=17, fontweight='bold', color='white', pad=0)
+    
+    plt.tight_layout()
+    return fig
+
+def render_stats_section(title, rows):
+    """Render compact stats rows that fit in the right panel without scrolling."""
+    st.markdown(f'<div class="stats-section-title">{title}</div>', unsafe_allow_html=True)
+    rows_html = "".join(
+        f'<div class="stat-row"><span>{label}</span><span>{value}</span></div>'
+        for label, value in rows
+    )
+    st.markdown(f'<div class="stats-card">{rows_html}</div>', unsafe_allow_html=True)
+
+
+def calculate_expected_point_stats(filtered_shots):
+    """Calculate expected points by zone regardless of chart type."""
+    hoop_x, hoop_y = 25, 0
+    zone_df = filtered_shots.copy()
+    zone_df['dist_from_hoop'] = np.sqrt(
+        (zone_df['coord_x'] - hoop_x) ** 2 +
+        (zone_df['coord_y'] - hoop_y) ** 2
+    )
+
+    overall_avg = zone_df['points'].mean()
+    two_pt_shots = zone_df[~zone_df['is_three_point']]
+    three_pt_shots = zone_df[zone_df['is_three_point']]
+
+    layup_shots = two_pt_shots[two_pt_shots['dist_from_hoop'] <= 5]
+    paint_shots = two_pt_shots[
+        (two_pt_shots['coord_x'] >= 19) & (two_pt_shots['coord_x'] <= 31) &
+        (two_pt_shots['coord_y'] >= -4) & (two_pt_shots['coord_y'] <= 15) &
+        (two_pt_shots['dist_from_hoop'] > 5)
+    ]
+    midrange_shots = two_pt_shots[
+        (two_pt_shots['dist_from_hoop'] > 5) &
+        ~((two_pt_shots['coord_x'] >= 19) & (two_pt_shots['coord_x'] <= 31) &
+          (two_pt_shots['coord_y'] >= -4) & (two_pt_shots['coord_y'] <= 15))
+    ]
+
+    return {
+        'overall': overall_avg if pd.notna(overall_avg) else 0,
+        'layup': layup_shots['points'].mean() if len(layup_shots) > 0 else 0,
+        'paint': paint_shots['points'].mean() if len(paint_shots) > 0 else 0,
+        'midrange': midrange_shots['points'].mean() if len(midrange_shots) > 0 else 0,
+        'three_pt': three_pt_shots['points'].mean() if len(three_pt_shots) > 0 else 0,
+        'layup_count': len(layup_shots),
+        'paint_count': len(paint_shots),
+        'midrange_count': len(midrange_shots),
+        'three_pt_count': len(three_pt_shots)
+    }
+
+# Main app
+st.title("College Basketball Shot Charts")
+#st.markdown("Filter by team, player, or game to visualize shot charts and performance")
+
+# Load data
+with st.spinner("Loading shot data..."):
+    try:
+        shots = load_data()
+    except Exception as exc:
+        st.error(str(exc))
+        st.stop()
+
+# Sidebar filters
+st.sidebar.header("Shooting Filters")
+st.sidebar.markdown("<style>div.row-widget.stRadio > div{font-size: 30px;}</style>", unsafe_allow_html=True)
+st.sidebar.markdown(f"✅ Loaded {len(shots):,} shots from {shots['game_id'].nunique():,} games")
+st.sidebar.caption(f"Data source: {shots.attrs.get('data_source', 'Unknown')}")
+
+filter_mode = st.sidebar.radio(
+    "Filter by:",
+    ["Team", "Player", "Game", "All Games"],
+    key="filter_mode"
+)
+
+filtered_shots = shots.copy()
+
+if filter_mode == "Team":
+    teams = sorted(shots['team'].dropna().unique())
+    selected_team = st.sidebar.selectbox("Select Team:", teams, key="team_select")
+    filtered_shots = shots[shots['team'] == selected_team]
+    title = f"Shot Chart - {selected_team}"
+    
+elif filter_mode == "Player":
+    players = sorted(shots['player'].dropna().unique())
+    players = [p for p in players if p]  # Remove empty strings
+    selected_player = st.sidebar.selectbox("Select Player:", players, key="player_select")
+    filtered_shots = shots[shots['player'] == selected_player]
+    title = f"Shot Chart - {selected_player}"
+    
+elif filter_mode == "Game":
+    # Create game labels (home vs away)
+    game_labels = shots.groupby('game_id').agg({
+        'home_team': 'first',
+        'away_team': 'first'
+    })
+    game_labels['label'] = game_labels['home_team'] + ' vs ' + game_labels['away_team']
+    game_dict = game_labels['label'].to_dict()
+    
+    game_options = [f"{game_dict[gid]} (ID: {gid})" for gid in sorted(shots['game_id'].unique())]
+    selected_game_str = st.sidebar.selectbox("Select Game:", game_options, key="game_select")
+    selected_game_id = int(selected_game_str.split("ID: ")[1].rstrip(")"))
+    
+    filtered_shots = shots[shots['game_id'] == selected_game_id]
+    
+    # Option to filter by team within game
+    teams_in_game = filtered_shots['team'].dropna().unique()
+    team_filter = st.sidebar.radio("Show:", ["Both Teams"] + list(teams_in_game), key="team_filter")
+    
+    if team_filter != "Both Teams":
+        filtered_shots = filtered_shots[filtered_shots['team'] == team_filter]
+        title = f"Shot Chart - {team_filter} ({game_dict[selected_game_id]})"
+    else:
+        title = f"Shot Chart - {game_dict[selected_game_id]}"
+else:
+    title = "Shot Chart - All Games"
+
+# Chart type selector
+if filter_mode == "All Games":
+    chart_mode = 'heatmap'
+    st.sidebar.caption("All Games view defaults to heatmap.")
+else:
+    chart_type = st.sidebar.radio(
+        "Chart Type:",
+        ["Scatter (Individual Shots)", "Heatmap (Expected Points)"],
+        key="chart_type"
+    )
+    chart_mode = 'scatter' if "Scatter" in chart_type else 'heatmap'
+
+# Create and display chart with stats on the right
+if len(filtered_shots) > 0:
+    col_chart, col_stats = st.columns([4, 1])
+    
+    with col_chart:
+        with st.spinner("Generating shot chart..."):
+            fig = create_shot_chart(filtered_shots, title, chart_mode)
+            if fig:
+                st.pyplot(fig)
+                plt.close(fig)
+    
+    with col_stats:
+        st.markdown('<div class="stats-panel-header">Statistics</div>', unsafe_allow_html=True)
+
+        total_shots = len(filtered_shots)
+        made_shots = int(filtered_shots['is_made'].sum())
+        fg_pct = (made_shots / total_shots * 100) if total_shots > 0 else 0
+
+        two_pt = filtered_shots[~filtered_shots['is_three_point']]
+        three_pt = filtered_shots[filtered_shots['is_three_point']]
+
+        two_pt_attempts = len(two_pt)
+        three_pt_attempts = len(three_pt)
+        two_pt_makes = int(two_pt['is_made'].sum())
+        three_pt_makes = int(three_pt['is_made'].sum())
+
+        two_pt_pct = (
+            f"{(two_pt_makes / two_pt_attempts * 100):.1f}% ({two_pt_makes}/{two_pt_attempts})"
+            if two_pt_attempts > 0 else "N/A"
+        )
+        three_pt_pct = (
+            f"{(three_pt_makes / three_pt_attempts * 100):.1f}% ({three_pt_makes}/{three_pt_attempts})"
+            if three_pt_attempts > 0 else "N/A"
+        )
+
+        render_stats_section("Overall", [
+            ("Total Shots", f"{total_shots}"),
+            ("Makes", f"{made_shots}"),
+            ("FG%", f"{fg_pct:.1f}%")
+        ])
+
+        render_stats_section("Shot Distribution", [
+            ("2PT Attempts", f"{two_pt_attempts}"),
+            ("2PT%", two_pt_pct),
+            ("3PT Attempts", f"{three_pt_attempts}"),
+            ("3PT%", three_pt_pct)
+        ])
+
+        total_points = filtered_shots['points'].sum()
+        render_stats_section("Scoring", [
+            ("Total Points", f"{int(total_points)}"),
+            ("Pts/Shot", f"{filtered_shots['points'].mean():.3f}")
+        ])
+
+        stats = calculate_expected_point_stats(filtered_shots)
+        render_stats_section("Expected Points", [
+            ("Overall", f"{stats['overall']:.3f}"),
+            (f"Layup ({stats['layup_count']})", f"{stats['layup']:.3f}"),
+            (f"Paint ({stats['paint_count']})", f"{stats['paint']:.3f}"),
+            (f"Midrange ({stats['midrange_count']})", f"{stats['midrange']:.3f}"),
+            (f"3-Point ({stats['three_pt_count']})", f"{stats['three_pt']:.3f}")
+        ])
+else:
+    st.warning("No shots found for the selected filters.")
+
+

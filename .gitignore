@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Keep large local datasets out of git-hosted deploys
+cbb_pbp.csv
+
+# Optional generated output
+catboost_info/
+cloudflared.log

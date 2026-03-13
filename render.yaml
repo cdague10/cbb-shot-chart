@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: cbb-shot-chart
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run shotchart_app.py --server.address 0.0.0.0 --server.port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: CBB_DATA_FILE
+        value: filtered_shots.csv
