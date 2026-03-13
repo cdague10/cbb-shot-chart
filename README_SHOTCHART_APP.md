@@ -58,7 +58,7 @@ The app will open automatically in your browser at `http://localhost:8501`
 - The app now loads data in this order:
    1. `CBB_DATA_URL` environment variable (hosted CSV or Parquet URL)
    2. Local `cbb_pbp.csv`
-   3. `CBB_DEFAULT_DATA_URL` (defaults to hosted `cbb_pbp.csv` release asset)
+   3. `CBB_DEFAULT_DATA_URL` (defaults to hosted `cbb_pbp_shots.parquet` release asset)
    4. `CBB_DATA_FILE` environment variable (local file path)
    5. Local `filtered_shots.csv`
 - Dataset must contain: game_id, coord_x, coord_y, play_type, team, score, miss, text
@@ -77,7 +77,7 @@ The app will open automatically in your browser at `http://localhost:8501`
 2. In Render, create a new Web Service from the repo.
 3. Keep service name as `cbb-shot-chart` (defined in `render.yaml`) for a URL like:
     `https://cbb-shot-chart.onrender.com`
-4. Full `cbb_pbp.csv` is already configured via `CBB_DATA_URL` in `render.yaml`.
+4. Full shot-level dataset from `cbb_pbp.csv` is already configured via `CBB_DATA_URL` in `render.yaml` using an optimized parquet asset.
 
 ### Local Network
 ```bash

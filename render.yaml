@@ -9,4 +9,4 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.9
       - key: CBB_DATA_URL
-        value: https://github.com/cdague10/cbb-shot-chart/releases/download/cbb-pbp-data/cbb_pbp.csv
+        value: https://github.com/cdague10/cbb-shot-chart/releases/download/cbb-pbp-data/cbb_pbp_shots.parquet

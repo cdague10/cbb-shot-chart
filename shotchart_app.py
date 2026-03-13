@@ -9,7 +9,7 @@ import os
 # Set page config
 st.set_page_config(page_title="CBB Shot Chart Explorer", layout="wide", page_icon="🏀")
 
-DEFAULT_CBB_DATA_URL = "https://github.com/cdague10/cbb-shot-chart/releases/download/cbb-pbp-data/cbb_pbp.csv"
+DEFAULT_CBB_DATA_URL = "https://github.com/cdague10/cbb-shot-chart/releases/download/cbb-pbp-data/cbb_pbp_shots.parquet"
 SHOT_TYPES = {'DunkShot', 'JumpShot', 'LayUpShot', 'TipShot'}
 REQUIRED_SHOT_COLUMNS = [
     'game_id', 'clock', 'text', 'home_team', 'away_team', 'team',
@@ -120,7 +120,10 @@ def _read_shot_source(source):
     """Read shot data from CSV or Parquet path/URL."""
     source_lower = str(source).lower()
     if source_lower.endswith('.parquet'):
-        df = pd.read_parquet(source)
+        try:
+            df = pd.read_parquet(source, columns=REQUIRED_SHOT_COLUMNS)
+        except Exception:
+            df = pd.read_parquet(source)
     else:
         chunks = []
         csv_iter = pd.read_csv(
