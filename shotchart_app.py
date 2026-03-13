@@ -15,6 +15,10 @@ REQUIRED_SHOT_COLUMNS = [
     'game_id', 'clock', 'text', 'home_team', 'away_team', 'team',
     'play_type', 'score', 'miss', 'coord_x', 'coord_y'
 ]
+PREPROCESSED_SHOT_COLUMNS = [
+    'game_id', 'home_team', 'away_team', 'team', 'player',
+    'coord_x', 'coord_y', 'is_made', 'is_three_point', 'points'
+]
 
 # Custom CSS
 st.markdown("""
@@ -152,6 +156,16 @@ def _read_shot_source(source):
     return df
 
 
+def _coerce_bool_series(series):
+    """Handle bool columns robustly across CSV/Parquet/string inputs."""
+    if pd.api.types.is_bool_dtype(series):
+        return series.fillna(False)
+    if pd.api.types.is_numeric_dtype(series):
+        return series.fillna(0).astype(int).astype(bool)
+    normalized = series.fillna('').astype(str).str.strip().str.lower()
+    return normalized.isin({'1', 'true', 't', 'yes', 'y'})
+
+
 @st.cache_data
 def load_data():
     data_url = os.environ.get('CBB_DATA_URL', '').strip()
@@ -189,6 +203,22 @@ def load_data():
             "or place cbb_pbp.csv / filtered_shots.csv beside this app."
             + (f"\n\nRecent load errors:\n{error_details}" if error_details else "")
         )
+
+    # Fast path for preprocessed full-shot datasets used in deployment.
+    if set(PREPROCESSED_SHOT_COLUMNS).issubset(df.columns):
+        shots = df[PREPROCESSED_SHOT_COLUMNS].copy()
+        shots['coord_x'] = pd.to_numeric(shots['coord_x'], errors='coerce')
+        shots['coord_y'] = pd.to_numeric(shots['coord_y'], errors='coerce')
+        shots = shots[(shots['coord_x'].notna()) & (shots['coord_y'].notna())]
+        shots['is_made'] = _coerce_bool_series(shots['is_made'])
+        shots['is_three_point'] = _coerce_bool_series(shots['is_three_point'])
+        shots['points'] = pd.to_numeric(shots['points'], errors='coerce').fillna(0)
+        shots['player'] = shots['player'].fillna('').astype(str).str.strip()
+        shots.attrs['data_source'] = data_source_used
+        return shots
+
+    if 'play_type' not in df.columns:
+        raise ValueError("Data source is missing required column 'play_type'.")
 
     # Filter for shots only
     shots = df[df['play_type'].isin(SHOT_TYPES)].copy()
