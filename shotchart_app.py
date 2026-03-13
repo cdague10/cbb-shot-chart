@@ -10,6 +10,11 @@ import os
 st.set_page_config(page_title="CBB Shot Chart Explorer", layout="wide", page_icon="🏀")
 
 DEFAULT_CBB_DATA_URL = "https://github.com/cdague10/cbb-shot-chart/releases/download/cbb-pbp-data/cbb_pbp.csv"
+SHOT_TYPES = {'DunkShot', 'JumpShot', 'LayUpShot', 'TipShot'}
+REQUIRED_SHOT_COLUMNS = [
+    'game_id', 'clock', 'text', 'home_team', 'away_team', 'team',
+    'play_type', 'score', 'miss', 'coord_x', 'coord_y'
+]
 
 # Custom CSS
 st.markdown("""
@@ -101,6 +106,12 @@ st.markdown("""
         margin-top: 0.1rem !important;
         margin-bottom: 0.35rem !important;
     }
+    .creator-credit {
+        font-size: 0.82rem;
+        color: #c8d7f0;
+        opacity: 0.92;
+        margin-top: 0.6rem;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -109,8 +120,33 @@ def _read_shot_source(source):
     """Read shot data from CSV or Parquet path/URL."""
     source_lower = str(source).lower()
     if source_lower.endswith('.parquet'):
-        return pd.read_parquet(source)
-    return pd.read_csv(source, on_bad_lines='skip')
+        df = pd.read_parquet(source)
+    else:
+        chunks = []
+        csv_iter = pd.read_csv(
+            source,
+            on_bad_lines='skip',
+            usecols=lambda c: c in REQUIRED_SHOT_COLUMNS,
+            chunksize=150000,
+            low_memory=False
+        )
+        for chunk in csv_iter:
+            if 'play_type' not in chunk.columns:
+                continue
+            shot_chunk = chunk[chunk['play_type'].isin(SHOT_TYPES)]
+            if not shot_chunk.empty:
+                chunks.append(shot_chunk)
+
+        if chunks:
+            df = pd.concat(chunks, ignore_index=True)
+        else:
+            df = pd.DataFrame(columns=REQUIRED_SHOT_COLUMNS)
+
+    for column in REQUIRED_SHOT_COLUMNS:
+        if column not in df.columns:
+            df[column] = pd.NA
+
+    return df
 
 
 @st.cache_data
@@ -152,8 +188,9 @@ def load_data():
         )
 
     # Filter for shots only
-    shot_types = ['DunkShot', 'JumpShot', 'LayUpShot', 'TipShot']
-    shots = df[df['play_type'].isin(shot_types)].copy()
+    shots = df[df['play_type'].isin(SHOT_TYPES)].copy()
+    shots['coord_x'] = pd.to_numeric(shots['coord_x'], errors='coerce')
+    shots['coord_y'] = pd.to_numeric(shots['coord_y'], errors='coerce')
     shots = shots[(shots['coord_x'].notna()) & (shots['coord_y'].notna())]
 
     # Remove duplicate plays
@@ -478,6 +515,8 @@ else:
         key="chart_type"
     )
     chart_mode = 'scatter' if "Scatter" in chart_type else 'heatmap'
+
+st.sidebar.markdown('<div class="creator-credit">Created by Connor Dague | @cdague10</div>', unsafe_allow_html=True)
 
 # Create and display chart with stats on the right
 if len(filtered_shots) > 0:
