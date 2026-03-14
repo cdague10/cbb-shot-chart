@@ -53,14 +53,41 @@ The app will open automatically in your browser at `http://localhost:8501`
    - Sidebar shows quick stats
    - Bottom of page shows detailed breakdowns
 
+## Shot+ Model Training
+
+Train a Shot+ model from `cbb_pbp.csv` so each shot receives a grade that uses:
+- Shot location
+- Shooter efficiency at nearby locations
+
+Run:
+
+```bash
+python train_shot_plus_model.py
+```
+
+Optional faster test run on a sample:
+
+```bash
+python train_shot_plus_model.py --sample-frac 0.25
+```
+
+Outputs:
+- `cbb_pbp_shot_plus.parquet`: Per-shot expected points, `shot_plus`, and grades
+- `shot_plus_model.pkl`: Trained model bundle
+- `shot_plus_metrics.json`: Validation metrics
+
+To use Shot+ in the app, point `CBB_DATA_URL` or `CBB_DATA_FILE` to `cbb_pbp_shot_plus.parquet`.
+The app will automatically show a Shot+ stats section when these columns exist.
+
 ## Data Requirements
 
 - The app now loads data in this order:
    1. `CBB_DATA_URL` environment variable (hosted CSV or Parquet URL)
-   2. Local `cbb_pbp.csv`
-   3. `CBB_DEFAULT_DATA_URL` (defaults to hosted `cbb_pbp_shots.parquet` release asset)
-   4. `CBB_DATA_FILE` environment variable (local file path)
-   5. Local `filtered_shots.csv`
+   2. `CBB_DATA_FILE` environment variable (local file path)
+   3. Local `cbb_pbp_shot_plus.parquet` (auto-picked if present)
+   4. Local `cbb_pbp.csv`
+   5. `CBB_DEFAULT_DATA_URL` (defaults to hosted `cbb_pbp_shots.parquet` release asset)
+   6. Local `filtered_shots.csv`
 - Dataset must contain: game_id, coord_x, coord_y, play_type, team, score, miss, text
 
 ## Deployment Options

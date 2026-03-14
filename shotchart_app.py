@@ -19,6 +19,10 @@ PREPROCESSED_SHOT_COLUMNS = [
     'game_id', 'home_team', 'away_team', 'team', 'player',
     'coord_x', 'coord_y', 'is_made', 'is_three_point', 'points'
 ]
+SHOT_PLUS_OPTIONAL_COLUMNS = [
+    'make_probability_model', 'expected_points_model', 'shot_plus', 'shot_grade',
+    'shot_value_added', 'result_plus', 'result_grade'
+]
 
 # Custom CSS
 st.markdown("""
@@ -175,11 +179,18 @@ def load_data():
     source_candidates = []
     if data_url:
         source_candidates.append(('url', data_url))
-    source_candidates.append(('file', 'cbb_pbp.csv'))
-    if default_data_url and not data_url:
-        source_candidates.append(('url', default_data_url))
+
+    # Respect explicit local override before defaults.
     if data_file_override:
         source_candidates.append(('file', data_file_override))
+
+    # Prefer locally-scored Shot+ parquet when present.
+    source_candidates.append(('file', 'cbb_pbp_shot_plus.parquet'))
+    source_candidates.append(('file', 'cbb_pbp.csv'))
+
+    if default_data_url and not data_url:
+        source_candidates.append(('url', default_data_url))
+
     source_candidates.append(('file', 'filtered_shots.csv'))
 
     df = None
@@ -200,13 +211,14 @@ def load_data():
         error_details = "\n".join(load_errors[:3])
         raise FileNotFoundError(
             "No usable data source found. Set CBB_DATA_URL to a hosted CSV/Parquet URL, "
-            "or place cbb_pbp.csv / filtered_shots.csv beside this app."
+            "or place cbb_pbp_shot_plus.parquet / cbb_pbp.csv / filtered_shots.csv beside this app."
             + (f"\n\nRecent load errors:\n{error_details}" if error_details else "")
         )
 
     # Fast path for preprocessed full-shot datasets used in deployment.
     if set(PREPROCESSED_SHOT_COLUMNS).issubset(df.columns):
-        shots = df[PREPROCESSED_SHOT_COLUMNS].copy()
+        optional_columns = [c for c in SHOT_PLUS_OPTIONAL_COLUMNS if c in df.columns]
+        shots = df[PREPROCESSED_SHOT_COLUMNS + optional_columns].copy()
         shots['coord_x'] = pd.to_numeric(shots['coord_x'], errors='coerce')
         shots['coord_y'] = pd.to_numeric(shots['coord_y'], errors='coerce')
         shots = shots[(shots['coord_x'].notna()) & (shots['coord_y'].notna())]
@@ -214,7 +226,18 @@ def load_data():
         shots['is_three_point'] = _coerce_bool_series(shots['is_three_point'])
         shots['points'] = pd.to_numeric(shots['points'], errors='coerce').fillna(0)
         shots['player'] = shots['player'].fillna('').astype(str).str.strip()
+
+        for col in ('make_probability_model', 'expected_points_model', 'shot_plus', 'shot_value_added', 'result_plus'):
+            if col in shots.columns:
+                shots[col] = pd.to_numeric(shots[col], errors='coerce')
+
+        for col in ('shot_grade', 'result_grade'):
+            if col in shots.columns:
+                shots[col] = shots[col].fillna('').astype(str).str.strip()
+
         shots.attrs['data_source'] = data_source_used
+        shots.attrs['requested_data_url'] = data_url
+        shots.attrs['load_errors'] = load_errors
         return shots
 
     if 'play_type' not in df.columns:
@@ -282,6 +305,8 @@ def load_data():
         shots.loc[verbless_no_miss, 'is_made'] = True
 
     shots.attrs['data_source'] = data_source_used
+    shots.attrs['requested_data_url'] = data_url
+    shots.attrs['load_errors'] = load_errors
     return shots
 
 def draw_court(ax, color='white', overlay_zorder=10):
@@ -487,11 +512,28 @@ with st.spinner("Loading shot data..."):
 st.sidebar.header("Shooting Filters")
 st.sidebar.markdown("<style>div.row-widget.stRadio > div{font-size: 30px;}</style>", unsafe_allow_html=True)
 st.sidebar.markdown(f"✅ Loaded {len(shots):,} shots from {shots['game_id'].nunique():,} games")
-st.sidebar.caption(f"Data source: {shots.attrs.get('data_source', 'Unknown')}")
+loaded_source = str(shots.attrs.get('data_source', 'Unknown'))
+requested_data_url = str(shots.attrs.get('requested_data_url', '')).strip()
+load_errors = shots.attrs.get('load_errors', [])
+
+
+if requested_data_url and loaded_source != requested_data_url:
+    st.sidebar.warning("CBB_DATA_URL failed, app is using fallback data source.")
+    if load_errors:
+        st.sidebar.caption(f"URL load error: {load_errors[0]}")
+
+#if 'shot_plus' in shots.columns:
+#    st.sidebar.success("Shot+ columns detected.")
+#else:
+#    st.sidebar.info("No Shot+ columns in loaded data.")
+
+filter_modes = ["Team", "Player", "Game", "All Games"]
+if st.session_state.get("filter_mode") not in filter_modes:
+    st.session_state["filter_mode"] = "Player"
 
 filter_mode = st.sidebar.radio(
     "Filter by:",
-    ["Team", "Player", "Game", "All Games"],
+    filter_modes,
     key="filter_mode"
 )
 
@@ -506,6 +548,11 @@ if filter_mode == "Team":
 elif filter_mode == "Player":
     players = sorted(shots['player'].dropna().unique())
     players = [p for p in players if p]  # Remove empty strings
+    preferred_player = "Cameron Boozer"
+    default_player = preferred_player if preferred_player in players else players[0]
+    if st.session_state.get("player_select") not in players:
+        st.session_state["player_select"] = default_player
+
     selected_player = st.sidebar.selectbox("Select Player:", players, key="player_select")
     filtered_shots = shots[shots['player'] == selected_player]
     title = f"Shot Chart - {selected_player}"
@@ -587,15 +634,13 @@ if len(filtered_shots) > 0:
         )
 
         render_stats_section("Overall", [
-            ("Total Shots", f"{total_shots}"),
+            ("FG%", f"{fg_pct:.1f}%"),
             ("Makes", f"{made_shots}"),
-            ("FG%", f"{fg_pct:.1f}%")
+            ("Total Shots", f"{total_shots}")
         ])
 
         render_stats_section("Shot Distribution", [
-            ("2PT Attempts", f"{two_pt_attempts}"),
             ("2PT%", two_pt_pct),
-            ("3PT Attempts", f"{three_pt_attempts}"),
             ("3PT%", three_pt_pct)
         ])
 
@@ -604,6 +649,28 @@ if len(filtered_shots) > 0:
             ("Total Points", f"{int(total_points)}"),
             ("Pts/Shot", f"{filtered_shots['points'].mean():.3f}")
         ])
+
+        if 'shot_plus' in filtered_shots.columns:
+            shot_plus_series = pd.to_numeric(filtered_shots['shot_plus'], errors='coerce')
+            shot_plus_avg = shot_plus_series.mean()
+
+            shot_plus_rows = [
+                ("Shot+", f"{shot_plus_avg:.1f}" if pd.notna(shot_plus_avg) else "N/A")
+            ]
+
+            if 'expected_points_model' in filtered_shots.columns:
+                model_xpts = pd.to_numeric(filtered_shots['expected_points_model'], errors='coerce').mean()
+                shot_plus_rows.append(("Model xPts/Shot", f"{model_xpts:.3f}" if pd.notna(model_xpts) else "N/A"))
+
+            if 'shot_grade' in filtered_shots.columns:
+                top_grades = filtered_shots['shot_grade'].isin(['A', 'A+']).sum()
+                shot_plus_rows.append(("A/A+ Shot Rate", f"{(top_grades/total_shots*100):.1f}%" if total_shots > 0 else "N/A"))
+
+            if 'result_plus' in filtered_shots.columns:
+                result_plus_avg = pd.to_numeric(filtered_shots['result_plus'], errors='coerce').mean()
+                shot_plus_rows.append(("Result+", f"{result_plus_avg:.1f}" if pd.notna(result_plus_avg) else "N/A"))
+
+            render_stats_section("Shot+", shot_plus_rows)
 
         stats = calculate_expected_point_stats(filtered_shots)
         render_stats_section("Expected Points", [
