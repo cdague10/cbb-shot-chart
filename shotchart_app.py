@@ -544,7 +544,19 @@ if filter_mode == "Team":
     teams = sorted(shots['team'].dropna().unique())
     selected_team = st.sidebar.selectbox("Select Team:", teams, key="team_select")
     filtered_shots = shots[shots['team'] == selected_team]
-    title = f"Shot Chart - {selected_team}"
+
+    # Optional player filter within selected team
+    team_players = sorted([p for p in filtered_shots['player'].dropna().unique() if p])
+    team_player_options = ["All Players"] + team_players
+    if st.session_state.get("team_player_filter") not in team_player_options:
+        st.session_state["team_player_filter"] = "All Players"
+    team_player_filter = st.sidebar.selectbox("Player:", team_player_options, key="team_player_filter")
+
+    if team_player_filter != "All Players":
+        filtered_shots = filtered_shots[filtered_shots['player'] == team_player_filter]
+        title = f"Shot Chart - {team_player_filter} ({selected_team})"
+    else:
+        title = f"Shot Chart - {selected_team}"
     
 elif filter_mode == "Player":
     players = sorted(shots['player'].dropna().unique())
