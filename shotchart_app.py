@@ -372,6 +372,7 @@ def create_shot_chart(filtered_shots, title, chart_type='scatter'):
     if chart_type == 'scatter':
         # Scatter plot individual shots
         fig, ax = plt.subplots(figsize=(5.2, 5.8))
+        fig.subplots_adjust(top=0.90, bottom=0.01, left=0.01, right=0.99)
         ax.set_facecolor('#f0f0f0')
         fig.patch.set_facecolor('white')
         
@@ -411,11 +412,12 @@ def create_shot_chart(filtered_shots, title, chart_type='scatter'):
         ax.set_aspect('equal')
         ax.set_xticks([])
         ax.set_yticks([])
-        ax.set_title(title, fontsize=18, fontweight='bold', pad=0)
+        ax.set_title(title, fontsize=14, fontweight='bold', pad=4)
         ax.legend(fontsize=8, loc='upper left')
         
     else:  # heatmap
-        fig, ax = plt.subplots(figsize=(4.4, 5.2))
+        fig, ax = plt.subplots(figsize=(5.2, 5.8))
+        fig.subplots_adjust(top=0.90, bottom=0.10, left=0.01, right=0.99)
         ax.set_facecolor('#1a1a1a')
         fig.patch.set_facecolor('#1a1a1a')
         
@@ -444,9 +446,8 @@ def create_shot_chart(filtered_shots, title, chart_type='scatter'):
         ax.set_aspect('equal')
         ax.set_xticks([])
         ax.set_yticks([])
-        ax.set_title(title, fontsize=17, fontweight='bold', color='white', pad=0)
+        ax.set_title(title, fontsize=14, fontweight='bold', color='white', pad=4)
     
-    plt.tight_layout()
     return fig
 
 def render_stats_section(title, rows):
@@ -578,9 +579,22 @@ elif filter_mode == "Game":
     
     if team_filter != "Both Teams":
         filtered_shots = filtered_shots[filtered_shots['team'] == team_filter]
-        title = f"Shot Chart - {team_filter} ({game_dict[selected_game_id]})"
+
+    # Player filter within game (updates based on team selection)
+    game_players = sorted([p for p in filtered_shots['player'].dropna().unique() if p])
+    game_player_options = ["All Players"] + game_players
+    game_player_filter = st.sidebar.selectbox("Player:", game_player_options, key="game_player_filter")
+
+    if game_player_filter != "All Players":
+        filtered_shots = filtered_shots[filtered_shots['player'] == game_player_filter]
+        if team_filter != "Both Teams":
+            title = f"{game_player_filter} — {team_filter} ({game_dict[selected_game_id]})"
+        else:
+            title = f"{game_player_filter} — {game_dict[selected_game_id]}"
+    elif team_filter != "Both Teams":
+        title = f"{team_filter} — {game_dict[selected_game_id]}"
     else:
-        title = f"Shot Chart - {game_dict[selected_game_id]}"
+        title = f"Shot Chart — {game_dict[selected_game_id]}"
 else:
     title = "Shot Chart - All Games"
 
